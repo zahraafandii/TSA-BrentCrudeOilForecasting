@@ -1,0 +1,1296 @@
+---
+title: "Assignment Time Series"
+author: "Zahra and Sanly"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+# Analyzing the Predictive Performance of Time Series Models on Brent Oil Prices
+Crude oil, particularly Brent Crude Oil, plays a crucial role in the global economy as a primary energy source and the commodity with the highest trade volume. Fluctuations in crude oil prices are often used as an indicator of global economic conditions, which can impact many industrial sectors. Therefore, oil price prediction is crucial to minimize risk and support more informed decision-making. This study aims to develop a Brent Crude Oil price prediction model using several time series forecasting algorithms and compare their performance to determine the best model. Historical Brent Crude Oil closing price data from October 9, 2023, to April 30, 2026, was used in this study.
+
+## 1. Import Library and Data
+```{r}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(tseries)
+library(car)
+library(forecast)
+library(zoo)
+library(lmtest)
+library(nortest)
+library(tidyr)
+```
+
+```{r}
+MinyakBrent <- read_excel("Data Historis Minyak Brent Berjangka.xlsx")
+head(MinyakBrent)
+```
+The dataset used is historical Brent oil futures price data, consisting of several variables: trading date (Date), closing price (Last), opening price (Open), highest price (Highest), lowest price (Lowest), trading volume (Vol.), and daily price percentage change (Change%). The Date variable is of the time type (POSIXct), while the Price and Percentage Change variables are of numeric type. However, the date order in the data above is still from newest to oldest, so we need to arrange the order in ascending order.
+
+## 2. Data Preprocessing
+### 2.1 Sort data by date
+```{r}
+MinyakBrent <- MinyakBrent[order(MinyakBrent$Tanggal),]
+head(MinyakBrent)
+```
+
+### 2.2 Selecting the variables used
+```{r}
+MinyakBrent <- MinyakBrent %>%
+  select(Tanggal, Terakhir) %>%
+  mutate(Tanggal = as.Date(Tanggal))
+```
+In this study, we will focus on examining the variable 'Terakhir' because we want to see how the last price of Brent oil is each day.
+
+### 2.3 Checking missing values
+```{r}
+colSums(is.na(MinyakBrent))
+```
+Based on the results of the examination, no missing values were found in all variables so that the data can be used directly for the next analysis stage.
+
+```{r}
+ggplot(MinyakBrent,
+       aes(x = Tanggal,
+           y = Terakhir)) +
+  geom_line(
+    color = "#1f77b4",
+    linewidth = 1
+  ) +
+  labs(
+    title = "Brent Oil Closing Price",
+    x = "Date",
+    y = "Price (USD)"
+  ) +
+  theme_minimal()
+```
+Based on the Brent oil price chart for the 2023–2026 period, it appears that oil prices experienced quite dynamic fluctuations throughout the observation period. In 2023, Brent prices hovered in the range of USD 75–90 per barrel, remaining relatively stable despite several short-term spikes and dips. Entering 2024, prices tended to gradually weaken, moving within a lower range than the previous year, around USD 70–80 per barrel.
+
+In 2025, the downward trend continued, with prices several times touching levels below USD 70 per barrel. This period indicated relatively weaker market conditions compared to the previous two years. However, towards the end of 2025, a price recovery began to emerge, marked by a gradual increase.
+
+The most significant change occurred in 2026, when Brent oil prices experienced a sharp surge from around USD 70 per barrel to over USD 110 per barrel. After reaching that high point, the price remained at a relatively high level but showed greater movement compared to the previous period.
+
+### 2.4 Checking the Data Structure
+```{r}
+str(MinyakBrent)
+```
+The date variable is of type POSIXct while the price variable is of type numeric so it is suitable for time series analysis.
+
+```{r}
+summary(MinyakBrent)
+```
+The average Brent oil price during the observation period was US$75.91 per barrel, with a minimum price of US$58.92 per barrel and a maximum price of US$118.35 per barrel. This indicates significant price fluctuations during the observation period.
+
+## 3. Exploratory Data Analysis (EDA)
+### 3.1 Histogram Harga Minyak Brent
+```{r}
+ggplot(MinyakBrent, aes(x = Terakhir)) +
+  geom_histogram(
+    bins = 30,
+    fill = "skyblue",
+    color = "black"
+  ) +
+  labs(
+    title = "Brent Oil Price Distribution",
+    x = "Price (USD/Barrel)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+Based on the histogram shows that Brent oil prices are primarily concentrated between USD 60 and USD 85 per barrel. The distribution is positively skewed, with a longer right tail indicating the presence of several high-price observations above USD 100 per barrel. This suggests that extreme price increases occurred occasionally during the observation period, while most prices remained within a moderate range.
+
+### 3.2 Barplot Harga Minyak Brent per Tahun
+```{r}
+harga_tahunan <- MinyakBrent %>%
+  mutate(Tahun = year(Tanggal)) %>%
+  group_by(Tahun) %>%
+  summarise(
+    Rata_Rata = mean(Terakhir, na.rm = TRUE)
+  )
+
+ggplot(harga_tahunan,
+       aes(x = factor(Tahun),
+           y = Rata_Rata,
+           fill = factor(Tahun))) +
+  geom_col() +
+  scale_fill_brewer(palette = "Pastel1") +
+  labs(
+    title = "Average Annual Price of Brent Oil",
+    x = "Year",
+    y = "Average Price (USD/Barrel)",
+    fill = "Year"
+  ) +
+  theme_minimal()
+```
+The annual average Brent oil prices exhibit a fluctuating pattern rather than a consistent upward or downward trend. The average price declined between 2023 and 2025, reaching its lowest level in 2025. Subsequently, a notable recovery occurred in 2026, resulting in the highest annual average price during the observation period. This pattern suggests that Brent oil prices are influenced by changing market conditions and external economic factors, leading to variations in price levels across different years.
+
+### 3.3 Outlier Plot
+```{r}
+Q1 <- quantile(MinyakBrent$Terakhir, 0.25)
+Q3 <- quantile(MinyakBrent$Terakhir, 0.75)
+
+IQR_value <- IQR(MinyakBrent$Terakhir)
+
+lower_mild <- Q1 - 1.5 * IQR_value
+upper_mild <- Q3 + 1.5 * IQR_value
+
+lower_extreme <- Q1 - 3 * IQR_value
+upper_extreme <- Q3 + 3 * IQR_value
+```
+
+```{r}
+MinyakBrent$Outlier <- "Normal"
+
+MinyakBrent$Outlier[
+  MinyakBrent$Terakhir < lower_mild |
+  MinyakBrent$Terakhir > upper_mild
+] <- "Mild"
+
+MinyakBrent$Outlier[
+  MinyakBrent$Terakhir < lower_extreme |
+  MinyakBrent$Terakhir > upper_extreme
+] <- "Extreme"
+```
+
+```{r}
+ggplot(MinyakBrent, aes(x = Tanggal, y = Terakhir)) +
+
+  geom_line(
+    color = "grey70",
+    linewidth = 0.3
+  ) +
+
+  geom_point(
+    data = subset(MinyakBrent, Outlier != "Normal"),
+    aes(color = Outlier),
+    size = 2
+  ) +
+
+  scale_color_manual(
+    values = c(
+      "Mild" = "#f4a261",
+      "Extreme" = "#d73027"
+    )
+  ) +
+
+  labs(
+    title = "Outliers in Brent Oil Prices",
+    x = "Date",
+    y = "Price (USD/Barrel)",
+    color = "Outlier"
+  ) +
+
+  theme_minimal(base_size = 12)
+```
+
+## 4. Time series conversion
+In order to be analyzed, the Brent Oil variable was converted into time series data using the ts() function.
+
+The time series object is formed using the closing price variable because this variable is the most commonly used in the analysis and forecasting of financial asset prices.
+```{r}
+ts_data <- ts(MinyakBrent$Terakhir)
+ts_data
+```
+
+**Visualization Brent Oil Price**
+```{r}
+plot(ts_data)
+```
+Based on the Brent oil price chart for the 2023–2026 period, it appears that oil prices experienced quite dynamic fluctuations throughout the observation period. In 2023, Brent prices hovered in the range of USD 75–90 per barrel, remaining relatively stable despite several short-term spikes and dips. Entering 2024, prices tended to gradually weaken, moving within a lower range than the previous year, around USD 70–80 per barrel.
+
+In 2025, the downward trend continued, with prices several times touching levels below USD 70 per barrel. This period indicated relatively weaker market conditions compared to the previous two years. However, towards the end of 2025, a price recovery began to emerge, marked by a gradual increase.
+
+The most significant change occurred in 2026, when Brent oil prices experienced a sharp surge from around USD 70 per barrel to over USD 110 per barrel. After reaching that high point, the price remained at a relatively high level but showed greater movement compared to the previous period.
+
+## 5. Split Data (80% Training, 20% Testing)
+```{r}
+n_total <- length(ts_data)
+train_size <- round(n_total * 0.8)
+test_size <- n_total - train_size
+
+train_data <- ts(ts_data[1:train_size])
+test_data <- ts(ts_data[(train_size + 1):n_total], start = train_size + 1)
+
+cat("Jumlah Data Training:", length(train_data), "\n")
+cat("Jumlah Data Testing :", length(test_data), "\n")
+```
+
+**Visualization splitting data**
+```{r}
+df_kronologis <- data.frame(
+  Indeks = 1:length(ts_data),
+  Harga  = as.numeric(ts_data),
+  Kelompok = c(rep("Data Training (80%)", train_size), rep("Data Testing (20%)", test_size))
+)
+
+ggplot(df_kronologis, aes(x = Indeks, y = Harga, color = Kelompok)) +
+  geom_line(linewidth = 0.8) +
+  geom_vline(xintercept = train_size, linetype = "dashed", color = "gray30", linewidth = 0.7) +
+  scale_color_brewer(palette = "Set2") +
+  labs(
+    title = "Pembagian Batas Area Data Training dan Testing",
+    subtitle = "Visualisasi sebaran data historis berdasarkan pembagian indeks 80:20",
+    x = "Periode / Waktu (Indeks)",
+    y = "Harga Minyak Brent (USD)",
+    color = "Pembagian Pembacaan Data:"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    legend.position = "bottom"
+  )
+```
+
+## 6. Stasionarity Analysis
+### 6.1 Stationarity Test to Variance
+$H_0$: Data is stationary to variance
+$H_1$: Data is not stationary to variance
+$\alpha$ = 5% = 0.05
+```{r}
+summary(powerTransform(train_data))
+```
+See that lambda = 1. Reject $H_0$ if p-value is less than $\alpha$.
+Because p-value (0.53299) is more than $\alpha$ (0.05), so we failed to reject the $H_0$. This means that the data is already stationary to variance, so we don't need to transform the data.
+
+### 6.2 Stationarity Test to Mean
+$H_0$ : Data is not stationary to the mean
+$H_1$ : Data is stationary to the mean
+$\alpha$ = 5% = 0.05
+```{r}
+adf.test(train_data)
+```
+Reject $H_0$ if p-value less than $\alpha$.
+because p-value (0.08405) is more than $\alpha$ (0.05), we failed to reject $H_0$. This means The ADF test results on the Box-Cox transformed data indicate that the data is still not stationary about the mean. Therefore, first-order differencing is performed to eliminate trends and stabilize the mean. After differencing, the Augmented Dickey-Fuller (ADF) test is performed again to evaluate stationarity about the mean.
+
+```{r}
+ts_diff <- diff(train_data)
+adf.test(ts_diff)
+```
+Reject $H_0$ if p-value is less than $\alpha$.
+because the p-value (0.01) is less than $\alpha$ (0.05), we reject $H_0$. This means that the data is stationary to the mean.
+
+This means that the data is ready to be used because it meets the stationarity assumption.
+
+```{r}
+diff_df <- data.frame(
+  Differencing = as.numeric(ts_diff)
+)
+
+ggplot(diff_df,
+       aes(x = Differencing)) +
+  geom_histogram(
+    bins = 30,
+    fill = "#4F81BD",
+    color = "white"
+  ) +
+  labs(
+    title = "Distribusi Data Setelah Differencing",
+    x = "Nilai Differencing",
+    y = "Frekuensi"
+  ) +
+  theme_minimal()
+```
+
+## 7. Identify Model
+```{r}
+ggtsdisplay(ts_diff, 
+            main = "Correlation Analysis: Price plot after Differencing order 1, ACF, and PACF",
+            theme = theme_minimal())
+```
+The graphs of the Box-Cox transformed and first-order differencing data show that fluctuations have centered around a relatively constant mean and no longer exhibit a clear trend. Furthermore, the data distribution tends to be more stable than before the transformation, although some spikes remain during certain periods.
+
+The stationarity of the first-order differenced series ($\Delta Y_t$) is visually confirmed by the time series plot (top panel), which fluctuates around a constant mean of zero with no discernible trend. To identify the potential orders for the Autoregressive ($p$) and Moving Average ($q$) components of the ARIMA model, the Autocorrelation Function (ACF) and Partial Autocorrelation Function (PACF) plots are analyzed.
+
+The ACF plot is utilized to determine the maximum order of the Moving Average ($q$) process. As shown in the bottom-left panel, nearly all spikes at the initial lags (lags 1 to 8) remain strictly within the 95% confidence intervals (represented by the blue dashed lines). Although there is a minor significant spike at lag 9 and lag 20, the lack of significant, persistent correlation at the earliest lags suggests that the moving average component is negligible or close to zero.
+
+The PACF plot is employed to identify the order of the Autoregressive ($p$) process. Similar to the ACF behavior, the PACF plot (bottom-right panel) reveals that the partial autocorrelations at the immediate past lags are statistically insignificant, failing to cross the threshold boundaries. A single spike slightly breaches the confidence interval at lag 9, which is typical for high-frequency financial time series and can often be attributed to random noise or minor seasonal market microstructures rather than a true structural AR process.
+
+## 8. Time Series Forecasting (Traditional Method)
+### 8.1 Naive Forecast
+```{r}
+h_period <- n_total - train_size
+model_naive <- naive(train_data, h = h_period)
+print(model_naive)
+```
+
+```{r}
+akurasi_naive <- accuracy(model_naive, test_data)
+print(akurasi_naive)
+```
+
+**Forecasting Plot**
+```{r}
+df_plot <- data.frame(
+  Indeks = 1:length(ts_data),
+  Aktual = as.numeric(ts_data),
+  Prediksi = c(as.numeric(model_naive$fitted), as.numeric(model_naive$mean))
+)
+
+ggplot(df_plot, aes(x = Indeks)) +
+  geom_line(aes(y = Aktual, color = "Actual Data"), linewidth = 0.8) +
+  geom_line(aes(y = Prediksi, color = "Naive Forecast (Fitted & Forecast)"), 
+            linewidth = 0.7, lty = 2) +
+  geom_vline(xintercept = train_size, linetype = "dotdash", color = "blue", linewidth = 0.8) +
+  annotate("text", x = 250, y = 115, 
+           label = "TRAINING DATA", color = "blue", fontface = "bold", size = 3.5) +
+  annotate("text", x = 600, y = 115, 
+           label = "TESTING DATA", color = "blue", fontface = "bold", size = 3.5) +
+  scale_color_manual(values = c("Actual Data" = "black", 
+                                "Naive Forecast (Fitted & Forecast)" = "#e41a1c")) +
+  labs(
+    title = "Naive Model Performance Visualization",
+    subtitle = "In-Sample (Fitted) on Train Data vs Out-of-Sample (Forecast) on Test Data",
+    x = "Time / Period (Index)",
+    y = "Brent Crude Oil Price (USD)",
+    color = "Data Category:"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+summary, the empirical results demonstrate that while the Naive model offers a convenient baseline benchmark due to its low computational complexity and deceptively strong in-sample tracking, it is fundamentally inadequate for highly volatile commodity markets like Brent Crude Oil.
+
+### 8.2 Double Moving Average (DMA)
+#### 8.2.1 n = 3
+```{r}
+k <- 3
+ma1 <- rollmean(train_data, k = k, fill = NA, align = "right")
+ma2 <- rollmean(ma1, k = k, fill = NA, align = "right")
+
+a_t <- 2 * ma1 - ma2
+b_t <- (2 / (k - 1)) * (ma1 - ma2)
+
+train_fitted_dma1 <- a_t
+
+a_last <- as.numeric(tail(na.omit(a_t), 1))
+b_last <- as.numeric(tail(na.omit(b_t), 1))
+
+forecast_dma1 <- a_last + b_last * (1:h_period)
+
+test_forecast_dma1 <- ts(
+  forecast_dma1,
+  start = tsp(test_data)[1],
+  frequency = frequency(test_data)
+)
+```
+
+```{r}
+akurasi_train_dma1 <- accuracy(na.omit(train_fitted_dma1),
+                        train_data[(length(train_data)-length(na.omit(train_fitted_dma1))+1)
+                                   :length(train_data)]
+)
+
+akurasi_test_dma1 <- accuracy(test_forecast_dma1, test_data)
+
+common_cols <- intersect(
+  colnames(akurasi_train_dma1),
+  colnames(akurasi_test_dma1)
+)
+
+tabel_lengkap_dma1 <- rbind(
+  "Training set" = akurasi_train_dma1[, common_cols],
+  "Test set" = akurasi_test_dma1[, common_cols]
+)
+
+print(tabel_lengkap_dma1)
+```
+
+#### 8.2.2 n = 4
+```{r}
+k <- 4
+ma1 <- rollmean(train_data, k = k, fill = NA, align = "right")
+ma2 <- rollmean(ma1, k = k, fill = NA, align = "right")
+
+a_t <- 2 * ma1 - ma2
+b_t <- (2 / (k - 1)) * (ma1 - ma2)
+
+train_fitted_dma2 <- a_t
+
+a_last <- as.numeric(tail(na.omit(a_t), 1))
+b_last <- as.numeric(tail(na.omit(b_t), 1))
+
+forecast_dma2 <- a_last + b_last * (1:h_period)
+
+test_forecast_dma2 <- ts(
+  forecast_dma2,
+  start = tsp(test_data)[1],
+  frequency = frequency(test_data)
+)
+```
+
+```{r}
+akurasi_train_dma2 <- accuracy(na.omit(train_fitted_dma2),
+                        train_data[(length(train_data)-length(na.omit(train_fitted_dma2))+1)
+                                   :length(train_data)]
+)
+
+akurasi_test_dma2 <- accuracy(test_forecast_dma2, test_data)
+
+common_cols <- intersect(
+  colnames(akurasi_train_dma2),
+  colnames(akurasi_test_dma2)
+)
+
+tabel_lengkap_dma2 <- rbind(
+  "Training set" = akurasi_train_dma2[, common_cols],
+  "Test set" = akurasi_test_dma2[, common_cols]
+)
+
+print(tabel_lengkap_dma2)
+```
+
+#### 8.2.3 n = 6
+```{r}
+k <- 6
+ma1 <- rollmean(train_data, k = k, fill = NA, align = "right")
+ma2 <- rollmean(ma1, k = k, fill = NA, align = "right")
+
+a_t <- 2 * ma1 - ma2
+b_t <- (2 / (k - 1)) * (ma1 - ma2)
+
+train_fitted_dma3 <- a_t
+
+a_last <- as.numeric(tail(na.omit(a_t), 1))
+b_last <- as.numeric(tail(na.omit(b_t), 1))
+
+forecast_dma3 <- a_last + b_last * (1:h_period)
+
+test_forecast_dma3 <- ts(
+  forecast_dma3,
+  start = tsp(test_data)[1],
+  frequency = frequency(test_data)
+)
+```
+
+```{r}
+akurasi_train_dma3 <- accuracy(na.omit(train_fitted_dma3),
+                        train_data[(length(train_data)-length(na.omit(train_fitted_dma3))+1)
+                                   :length(train_data)]
+)
+
+akurasi_test_dma3 <- accuracy(test_forecast_dma3, test_data)
+
+common_cols <- intersect(
+  colnames(akurasi_train_dma3),
+  colnames(akurasi_test_dma3)
+)
+
+tabel_lengkap_dma3 <- rbind(
+  "Training set" = akurasi_train_dma3[, common_cols],
+  "Test set" = akurasi_test_dma3[, common_cols]
+)
+
+print(tabel_lengkap_dma3)
+```
+
+#### 8.2.4 n = 7
+```{r}
+k <- 7
+ma1 <- rollmean(train_data, k = k, fill = NA, align = "right")
+ma2 <- rollmean(ma1, k = k, fill = NA, align = "right")
+
+a_t <- 2 * ma1 - ma2
+b_t <- (2 / (k - 1)) * (ma1 - ma2)
+
+train_fitted_dma4 <- a_t
+
+a_last <- as.numeric(tail(na.omit(a_t), 1))
+b_last <- as.numeric(tail(na.omit(b_t), 1))
+
+forecast_dma4 <- a_last + b_last * (1:h_period)
+
+test_forecast_dma4 <- ts(
+  forecast_dma4,
+  start = tsp(test_data)[1],
+  frequency = frequency(test_data)
+)
+```
+
+```{r}
+akurasi_train_dma4 <- accuracy(na.omit(train_fitted_dma4),
+                        train_data[(length(train_data)-length(na.omit(train_fitted_dma4))+1)
+                                   :length(train_data)]
+)
+
+akurasi_test_dma4 <- accuracy(test_forecast_dma4, test_data)
+
+common_cols <- intersect(
+  colnames(akurasi_train_dma4),
+  colnames(akurasi_test_dma4)
+)
+
+tabel_lengkap_dma4 <- rbind(
+  "Training set" = akurasi_train_dma4[, common_cols],
+  "Test set" = akurasi_test_dma4[, common_cols]
+)
+
+print(tabel_lengkap_dma4)
+```
+
+#### 8.2.5 n = 8
+```{r}
+k <- 8
+ma1 <- rollmean(train_data, k = k, fill = NA, align = "right")
+ma2 <- rollmean(ma1, k = k, fill = NA, align = "right")
+
+a_t <- 2 * ma1 - ma2
+b_t <- (2 / (k - 1)) * (ma1 - ma2)
+
+train_fitted_dma5 <- a_t
+
+a_last <- as.numeric(tail(na.omit(a_t), 1))
+b_last <- as.numeric(tail(na.omit(b_t), 1))
+
+forecast_dma5 <- a_last + b_last * (1:h_period)
+
+test_forecast_dma5 <- ts(
+  forecast_dma5,
+  start = tsp(test_data)[1],
+  frequency = frequency(test_data)
+)
+```
+
+```{r}
+akurasi_train_dma5 <- accuracy(na.omit(train_fitted_dma5),
+                        train_data[(length(train_data)-length(na.omit(train_fitted_dma5))+1)
+                                   :length(train_data)]
+)
+
+akurasi_test_dma5 <- accuracy(test_forecast_dma5, test_data)
+
+common_cols <- intersect(
+  colnames(akurasi_train_dma5),
+  colnames(akurasi_test_dma5)
+)
+
+tabel_lengkap_dma5 <- rbind(
+  "Training set" = akurasi_train_dma5[, common_cols],
+  "Test set" = akurasi_test_dma5[, common_cols]
+)
+
+print(tabel_lengkap_dma5)
+```
+
+#### 8.2.6 Forecasting Plot 
+```{r}
+df_plot_dma <- data.frame(
+  Indeks = 1:length(ts_data),
+  Aktual = as.numeric(ts_data),
+  Prediksi = c(as.numeric(train_fitted_dma3), as.numeric(test_forecast_dma3))
+)
+
+ggplot(df_plot_dma, aes(x = Indeks)) +
+  geom_line(aes(y = Aktual, color = "Actual Data"), linewidth = 0.8) +
+  geom_line(aes(y = Prediksi, color = "DMA (n = 6) Forecast"), linewidth = 0.9, lty = 2) +
+  geom_vline(xintercept = train_size, linetype = "dotdash", color = "black", linewidth = 0.8) +
+  annotate("text", x = 250, y = 115, label = "TRAINING DATA", color = "black", fontface = "bold", size = 3.5) +
+  annotate("text", x = 600, y = 115, label = "TESTING DATA", color = "black", fontface = "bold", size = 3.5) +
+  scale_color_manual(values = c("Actual Data" = "black", "DMA (n = 6) Forecast" = "#ff7f00")) +
+  labs(
+    title = "Double Moving Average Model Performance Visualization",
+    subtitle = "In-Sample Smoothing (Train Data) vs Out-of-Sample Forecast (Test Data) with n = 6",
+    x = "Time / Period (Index)",
+    y = "Brent Crude Oil Price (USD)",
+    color = "Data Category:"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    panel.grid.major = element_line(color = "#f0f0f0"), 
+    panel.grid.minor = element_blank()
+  )
+```
+
+### 8.3 Double Exponential Smoothing (DES)
+#### 8.3.1 $\alpha = 0.33 \beta = 0.097$
+```{r}
+model_des1 <- holt(train_data, h = length(test_data), alpha = 0.33, beta = 0.097)
+
+train_fitted_des1 <- fitted(model_des1)
+test_forecast_des1 <- model_des1$mean
+```
+
+```{r}
+akurasi_des1 <- accuracy(test_forecast_des1, test_data)
+
+cat("\n--- HASIL EVALUASI AKURASI DES ---\n")
+print(akurasi_des1)
+```
+
+#### 8.3.2 $\alpha = 0.33 \beta = 0.095$
+```{r}
+model_des2 <- holt(train_data, h = length(test_data), alpha = 0.33, beta = 0.095)
+
+train_fitted_des2 <- fitted(model_des2)
+test_forecast_des2 <- model_des2$mean
+```
+
+```{r}
+akurasi_des2 <- accuracy(test_forecast_des2, test_data)
+
+cat("\n--- HASIL EVALUASI AKURASI DES ---\n")
+print(akurasi_des2)
+```
+
+#### 8.3.3 $\alpha = 0.29 \beta = 0.094$
+```{r}
+model_des3 <- holt(train_data, h = length(test_data), alpha = 0.29, beta = 0.094)
+
+train_fitted_des3 <- fitted(model_des3)
+test_forecast_des3 <- model_des3$mean
+```
+
+```{r}
+akurasi_des3 <- accuracy(test_forecast_des3, test_data)
+
+cat("\n--- HASIL EVALUASI AKURASI DES ---\n")
+print(akurasi_des3)
+```
+
+#### 8.3.4 $\alpha = 0.17 \beta = 0.083$
+```{r}
+model_des4 <- holt(train_data, h = length(test_data), alpha = 0.17, beta = 0.083)
+
+train_fitted_des4 <- fitted(model_des4)
+test_forecast_des4 <- model_des4$mean
+```
+
+```{r}
+akurasi_des4 <- accuracy(test_forecast_des4, test_data)
+
+cat("\n--- HASIL EVALUASI AKURASI DES ---\n")
+print(akurasi_des4)
+```
+
+#### 8.3.5 $\alpha = 0.16 \beta = 0.081$
+```{r}
+model_des5 <- holt(train_data, h = length(test_data), alpha = 0.16, beta = 0.081)
+
+train_fitted_des5 <- fitted(model_des5)
+test_forecast_des5 <- model_des5$mean
+```
+
+
+```{r}
+akurasi_des5 <- accuracy(test_forecast_des5, test_data)
+
+cat("\n--- HASIL EVALUASI AKURASI DES ---\n")
+print(akurasi_des5)
+```
+
+#### 8.3.6 Forecasting Plot
+```{r}
+df_plot_des <- data.frame(
+  Indeks = 1:length(ts_data),
+  Aktual = as.numeric(ts_data),
+  Prediksi = c(as.numeric(train_fitted_des5), as.numeric(test_forecast_des5))
+)
+
+ggplot(df_plot_des, aes(x = Indeks)) +
+  geom_line(aes(y = Aktual, color = "Actual Data"), linewidth = 0.8) +
+  geom_line(aes(y = Prediksi, color = "DES Forecast"), linewidth = 0.9, lty = 2) +
+  geom_vline(xintercept = train_size, linetype = "dotdash", color = "black", linewidth = 0.8) +
+  annotate("text", x = 250, y = 115, label = "TRAINING DATA", color = "black", fontface = "bold", size = 3.5) +
+  annotate("text", x = 600, y = 115, label = "TESTING DATA", color = "black", fontface = "bold", size = 3.5) +
+  scale_color_manual(values = c("Actual Data" = "black", "DES Forecast" = "#1e88e5")) +
+  labs(
+    title = "Double Exponential Smoothing Model Performance Visualization",
+    subtitle = "In-Sample Smoothing (Train Data) vs Out-of-Sample Forecast (Test Data)",
+    x = "Time / Period (Index)",
+    y = "Brent Crude Oil Price (USD)",
+    color = "Data Category:"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    panel.grid.major = element_line(color = "#f0f0f0"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+### 8.4 Time Series Regression
+```{r}
+df_regresi <- data.frame(
+  Aktual = as.numeric(ts_data),
+  Tren = 1:length(ts_data),
+  Lag1 = c(NA, head(as.numeric(ts_data), -1)),
+  Lag9 = c(rep(NA, 9), head(as.numeric(ts_data), -9))
+)
+
+df_train_reg <- na.omit(df_regresi[1:train_size, ])
+df_test_reg  <- df_regresi[(train_size + 1):length(ts_data), ]
+```
+
+#### 8.4.1 Trend
+```{r}
+model_regresi1 <- lm(Aktual ~ Tren, data = df_train_reg)
+
+cat("   REGRESSION COEFFICIENT SIGNIFICANCE TEST RESULTS\n")
+print(summary(model_regresi1)) 
+```
+
+```{r}
+uji_bp1 <- bptest(model_regresi1)
+
+cat("HETEROSKEDASTICITY TEST RESULTS\n")
+print(uji_bp1)
+
+residu_regresi1 <- residuals(model_regresi1)
+uji_lillie1 <- lillie.test(residu_regresi1)
+
+cat("NORMALITY TEST RESULTS\n")
+print(uji_lillie1)
+```
+
+```{r}
+train_fitted_reg1 <- predict(model_regresi1)
+
+test_forecast_reg1 <- predict(model_regresi1, newdata = df_test_reg)
+
+akurasi_train_reg1 <- accuracy(train_fitted_reg1, df_train_reg$Aktual)
+akurasi_test_reg1 <- accuracy(test_forecast_reg1, test_data)
+
+common_cols <- intersect(
+  colnames(akurasi_train_reg1),
+  colnames(akurasi_test_reg1)
+)
+
+tabel_lengkap_reg1 <- rbind(
+  "Training set" = akurasi_train_reg1[, common_cols],
+  "Test set" = akurasi_test_reg1[, common_cols]
+)
+
+cat("\n--- TABEL AKURASI TIME SERIES REGRESSION ---\n")
+print(tabel_lengkap_reg1)
+```
+
+#### 8.4.2 Trend + Lag 1
+```{r}
+model_regresi2 <- lm(Aktual ~ Tren + Lag1, data = df_train_reg)
+
+cat("   REGRESSION COEFFICIENT SIGNIFICANCE TEST RESULTS\n")
+print(summary(model_regresi2))
+```
+
+```{r}
+uji_bp2 <- bptest(model_regresi2)
+
+cat("HETEROSKEDASTICITY TEST RESULTS\n")
+print(uji_bp2)
+
+residu_regresi2 <- residuals(model_regresi2)
+uji_lillie2 <- lillie.test(residu_regresi2)
+
+cat("NORMALITY TEST RESULTS\n")
+print(uji_lillie2)
+```
+Based on the results of the Breusch-Pagan (BP) test, a p-value of 0.2755 was obtained, which is greater than the 0.05 significance level ($p > 0.05). This result indicates that the model fails to reject $H_0$, meaning the assumption of homoscedasticity is met. The absence of heteroscedasticity in the residuals proves that the error variance of the regression model is constant throughout the observation period, thus ensuring that the parameter estimator properties continue to meet the Best Linear Unbiased Estimator (BLUE) criteria in its variance dimension.
+
+Conversely, the normality test using the Lilliefors Test yielded a p-value < 0.05, thus $H_0$ was rejected and the residuals were concluded to be non-normally distributed. This non-normality does not invalidate the validity of the time series regression model. In modeling daily commodity assets such as Brent oil, the residual distribution often has leptokurtic characteristics (fat-tails) due to spontaneous extreme price shocks (leptokurtosis). According to the Central Limit Theorem, with a large sample size (N > 30), the normality assumption can be relaxed because the sampling distribution of the regression coefficients will approach normality asymptotically. Therefore, this Time Series Regression model remains valid and reliable for out-of-sample forecasting (point forecast) on testing data.
+
+```{r}
+train_fitted_reg2 <- predict(model_regresi2)
+
+test_forecast_reg2 <- numeric(nrow(df_test_reg))
+last_lag1 <- tail(df_train_reg$Aktual, 1)
+
+for(i in 1:nrow(df_test_reg)) {
+
+  prediksi_hari_ini <- predict(
+    model_regresi2,
+    newdata = data.frame(
+      Tren = df_test_reg$Tren[i],
+      Lag1 = last_lag1
+    )
+  )
+
+  test_forecast_reg2[i] <- prediksi_hari_ini
+
+  last_lag1 <- prediksi_hari_ini
+}
+
+akurasi_train_reg2 <- accuracy(train_fitted_reg2, df_train_reg$Aktual)
+akurasi_test_reg2 <- accuracy(test_forecast_reg2, test_data)
+
+common_cols <- intersect(
+  colnames(akurasi_train_reg2),
+  colnames(akurasi_test_reg2)
+)
+
+tabel_lengkap_reg2 <- rbind(
+  "Training set" = akurasi_train_reg2[, common_cols],
+  "Test set" = akurasi_test_reg2[, common_cols]
+)
+
+cat("\n--- TABEL AKURASI TIME SERIES REGRESSION ---\n")
+print(tabel_lengkap_reg2)
+```
+
+#### 8.4.3 Trend + Lag 1 + Lag 9
+```{r}
+model_regresi3 <- lm(Aktual ~ Tren + Lag1 + Lag9, data = df_train_reg)
+
+cat("   REGRESSION COEFFICIENT SIGNIFICANCE TEST RESULTS\n")
+print(summary(model_regresi3))
+```
+
+```{r}
+uji_bp3 <- bptest(model_regresi3)
+
+cat("HETEROSKEDASTICITY TEST RESULTS\n")
+print(uji_bp3)
+
+residu_regresi3 <- residuals(model_regresi3)
+uji_lillie3 <- lillie.test(residu_regresi3)
+
+cat("NORMALITY TEST RESULTS\n")
+print(uji_lillie3)
+```
+
+```{r}
+train_fitted_reg3 <- predict(model_regresi3)
+
+test_forecast_reg3 <- numeric(nrow(df_test_reg))
+
+history <- tail(df_train_reg$Aktual, 9)
+
+for(i in 1:nrow(df_test_reg)) {
+
+  prediksi_hari_ini <- predict(
+    model_regresi3,
+    newdata = data.frame(
+      Tren = df_test_reg$Tren[i],
+      Lag1 = history[9],
+      Lag9 = history[1]
+    )
+  )
+
+  test_forecast_reg3[i] <- prediksi_hari_ini
+
+  history <- c(history[-1], prediksi_hari_ini)
+}
+
+akurasi_train_reg3 <- accuracy(train_fitted_reg3, df_train_reg$Aktual)
+akurasi_test_reg3 <- accuracy(test_forecast_reg3, test_data)
+
+common_cols <- intersect(
+  colnames(akurasi_train_reg3),
+  colnames(akurasi_test_reg3)
+)
+
+tabel_lengkap_reg3 <- rbind(
+  "Training set" = akurasi_train_reg3[, common_cols],
+  "Test set" = akurasi_test_reg3[, common_cols]
+)
+
+cat("\n--- TABEL AKURASI TIME SERIES REGRESSION ---\n")
+print(tabel_lengkap_reg3)
+```
+
+#### 8.4.4 Lag 1
+```{r}
+model_regresi4 <- lm(Aktual ~ Lag1, data = df_train_reg)
+
+cat("   REGRESSION COEFFICIENT SIGNIFICANCE TEST RESULTS\n")
+print(summary(model_regresi4))
+```
+
+```{r}
+uji_bp4 <- bptest(model_regresi4)
+
+cat("HETEROSKEDASTICITY TEST RESULTS\n")
+print(uji_bp4)
+
+residu_regresi4 <- residuals(model_regresi4)
+uji_lillie4 <- lillie.test(residu_regresi4)
+
+cat("NORMALITY TEST RESULTS\n")
+print(uji_lillie4)
+```
+
+```{r}
+train_fitted_reg4 <- predict(model_regresi4)
+
+test_forecast_reg4 <- numeric(nrow(df_test_reg))
+
+last_lag1 <- tail(df_train_reg$Aktual, 1)
+
+for(i in 1:nrow(df_test_reg)) {
+
+  prediksi_hari_ini <- predict(
+    model_regresi4,
+    newdata = data.frame(
+      Lag1 = last_lag1
+    )
+  )
+
+  test_forecast_reg4[i] <- prediksi_hari_ini
+
+  last_lag1 <- prediksi_hari_ini
+}
+
+akurasi_train_reg4 <- accuracy(train_fitted_reg4,df_train_reg$Aktual)
+akurasi_test_reg4 <- accuracy(test_forecast_reg4,test_data)
+
+common_cols <- intersect(
+  colnames(akurasi_train_reg4),
+  colnames(akurasi_test_reg4)
+)
+
+tabel_lengkap_reg4 <- rbind(
+  "Training set" = akurasi_train_reg4[, common_cols],
+  "Test set" = akurasi_test_reg4[, common_cols]
+)
+
+cat("\n--- TABEL AKURASI TIME SERIES REGRESSION ---\n")
+print(tabel_lengkap_reg4)
+```
+
+#### 8.4.5 Lag 9
+```{r}
+model_regresi5 <- lm(Aktual ~ Lag9, data = df_train_reg)
+
+cat("   REGRESSION COEFFICIENT SIGNIFICANCE TEST RESULTS\n")
+print(summary(model_regresi5))
+```
+
+```{r}
+uji_bp5 <- bptest(model_regresi5)
+
+cat("HETEROSKEDASTICITY TEST RESULTS\n")
+print(uji_bp5)
+
+residu_regresi5 <- residuals(model_regresi5)
+uji_lillie5 <- lillie.test(residu_regresi5)
+
+cat("NORMALITY TEST RESULTS\n")
+print(uji_lillie5)
+```
+
+```{r}
+train_fitted_reg5 <- predict(model_regresi5)
+
+test_forecast_reg5 <- numeric(nrow(df_test_reg))
+
+history <- tail(df_train_reg$Aktual, 9)
+
+for(i in 1:nrow(df_test_reg)) {
+
+  prediksi_hari_ini <- predict(
+    model_regresi5,
+    newdata = data.frame(
+      Lag9 = history[1]
+    )
+  )
+
+  test_forecast_reg5[i] <- prediksi_hari_ini
+
+  history <- c(history[-1], prediksi_hari_ini)
+}
+
+akurasi_train_reg5 <- accuracy(train_fitted_reg5, df_train_reg$Aktual)
+akurasi_test_reg5 <- accuracy(test_forecast_reg5, test_data)
+
+common_cols <- intersect(
+  colnames(akurasi_train_reg5),
+  colnames(akurasi_test_reg5)
+)
+
+tabel_lengkap_reg5 <- rbind(
+  "Training set" = akurasi_train_reg5[, common_cols],
+  "Test set" = akurasi_test_reg5[, common_cols]
+)
+
+cat("\n--- TABEL AKURASI TIME SERIES REGRESSION ---\n")
+print(tabel_lengkap_reg5)
+```
+
+#### 8.4.6 Forecasting Plot
+```{r}
+ddf_plot_reg <- data.frame(
+  Indeks = 1:length(ts_data),
+  Aktual = as.numeric(ts_data),
+  Prediksi = c(rep(NA, 9), as.numeric(train_fitted_reg5),as.numeric(test_forecast_reg5))
+)
+
+ggplot(ddf_plot_reg, aes(x = Indeks)) +
+  geom_line(aes(y = Aktual, color = "Actual Data"), linewidth = 0.6, alpha = 0.4) +
+  geom_line(aes(y = Prediksi, color = "TS Regression Forecast"), linewidth = 1.0, lty = 1, alpha = 1) +
+  geom_vline(xintercept = train_size, linetype = "longdash", color = "#d32f2f", linewidth = 0.8) +
+  annotate("text", x = 250, y = 115, label = "TRAINING DATA", color = "#d32f2f", fontface = "bold", size = 3.5) +
+  annotate("text", x = 600, y = 115, label = "TESTING DATA", color = "#d32f2f", fontface = "bold", size = 3.5) +
+  scale_color_manual(values = c("Actual Data" = "gray30", "TS Regression Forecast" = "#00bfa5")) +
+  labs(
+    title = "Time Series Regression Model Performance Visualization",
+    subtitle = "In-Sample Fitted (Train Data) vs Dynamic Out-of-Sample Forecast (Test Data)",
+    x = "Time / Period (Index)",
+    y = "Brent Crude Oil Price (USD)",
+    color = "Data Category:"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    panel.grid.major = element_line(color = "#f5f5f5"),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 12)
+  )
+```
+
+### 8.5 ARIMA
+```{r}
+fit_arima110 <- Arima(train_data, order = c(1, 1, 0))
+cat("      HASIL COEFTEST ARIMA(1,1,0)\n")
+coeftest(fit_arima110)
+```
+
+```{r}
+fit_arima011 <- Arima(train_data, order = c(0, 1, 1))
+cat("      HASIL COEFTEST ARIMA(0,1,1)\n")
+coeftest(fit_arima011)
+```
+
+```{r}
+fit_arima111 <- Arima(train_data, order = c(1, 1, 1))
+cat("      HASIL COEFTEST ARIMA(1,1,1)\n")
+coeftest(fit_arima111)
+```
+
+```{r}
+fit_arima210 <- Arima(train_data, order = c(2, 1, 0))
+cat("      HASIL COEFTEST ARIMA(2,1,0)\n")
+coeftest(fit_arima210)
+```
+
+```{r}
+fit_arima012 <- Arima(train_data, order = c(0, 1, 2))
+cat("      HASIL COEFTEST ARIMA(0,1,2)\n")
+coeftest(fit_arima012)
+```
+
+```{r}
+fit_arima211 <- Arima(train_data, order = c(2, 1, 1))
+cat("      HASIL COEFTEST ARIMA(2,1,1)\n")
+coeftest(fit_arima211)
+```
+
+```{r}
+fit_arima112 <- Arima(train_data, order = c(1, 1, 2))
+cat("      HASIL COEFTEST ARIMA(1,1,2)\n")
+coeftest(fit_arima112)
+```
+
+```{r}
+fit_arima212 <- Arima(train_data, order = c(2, 1, 2))
+cat("      HASIL COEFTEST ARIMA(2,1,2)\n")
+coeftest(fit_arima212)
+```
+
+```{r}
+fit_arima213 <- Arima(train_data, order = c(2, 1, 3))
+cat("      HASIL COEFTEST ARIMA(2,1,3)\n")
+coeftest(fit_arima213)
+```
+
+```{r}
+fit_arima310 <- Arima(train_data, order = c(3, 1, 0))
+cat("      HASIL COEFTEST ARIMA(3,1,0)\n")
+coeftest(fit_arima310)
+```
+
+```{r}
+fit_arima013 <- Arima(train_data, order = c(0, 1, 3))
+cat("      HASIL COEFTEST ARIMA(0,1,3)\n")
+coeftest(fit_arima013)
+```
+
+```{r}
+fit_arima313 <- Arima(train_data, order = c(3, 1, 3))
+cat("      HASIL COEFTEST ARIMA(3,1,3)\n")
+coeftest(fit_arima313)
+```
+*Conclusion* Only ARIMA(2,1,2) that significant
+
+#### 8.5.1 Assumption Testing
+There are 2 assumption testing in ARIMA model:
+1. Residual are white noise
+2. Residual are normally distributed
+
+##### 8.5.1.1 Residual White noise
+$H_0$: Residuals are white noise
+$H_1$: Residuals are not white noise
+$\alpha$ = 5% = 0.05
+```{r}
+e = resid(fit_arima212)
+Box.test(e)
+```
+Since the p-value is 0.8423, we fail to reject $H_0$. Therefore, the residuals are white noise and satisfy the model assumptions.
+
+##### 8.5.1.2 Uji Normalitas
+$H_0$: Residuals are normally distributed
+$H_1$: Residuals are not normally distributed
+$\alpha$ = 0.05
+```{r}
+e = resid(fit_arima212)
+lillie.test(e)
+```
+Since the p-value is 0.002251, $H_0$ is rejected. Therefore, the residuals are not normally distributed and do not satisfy the assumption.Based on the results of the Lilliefors test on the ARIMA model residuals, the obtained p-value is < 0.05, which means the null hypothesis is rejected and the model residuals are not normally distributed. Non-normality in residuals is a common phenomenon encountered in financial and daily commodity time series data (asymmetric fat-tails). This indicates the presence of non-constant variance (heteroscedasticity) or high volatility driven by market shocks (structural breaks). This finding simultaneously provides a strong empirical justification that standard linear models such as ARIMA have limitations in capturing dynamic variance effects, thereby necessitating further analysis using volatility-based models such as ARCH/GARCH or non-linear Machine Learning-based approaches.
+
+```{r}
+h_period <- length(ts_data) - train_size
+
+forecast_arima212 <- forecast(fit_arima212, h = h_period)
+```
+
+```{r}
+akurasi_train_arima <- accuracy(fit_arima212$fitted, train_data)
+akurasi_test_arima  <- accuracy(forecast_arima212$mean, test_data)
+
+tabel_lengkap_arima <- rbind(
+  "Training set" = akurasi_train_arima[1, ],
+  "Test set"     = akurasi_test_arima[1, ]
+)
+
+cat("       TABEL AKURASI MODEL ARIMA(2,1,2)\n")
+print(tabel_lengkap_arima)
+```
+
+#### 8.5.2 Forecasting Plot
+```{r}
+df_plot_arima <- data.frame(
+  Indeks = 1:length(ts_data),
+  Aktual = as.numeric(ts_data),
+  Prediksi = c(as.numeric(fit_arima212$fitted), as.numeric(forecast_arima212$mean))
+)
+
+ggplot(df_plot_arima, aes(x = Indeks)) +
+  geom_line(aes(y = Aktual, color = "Actual Data"), linewidth = 0.6, alpha = 0.4) +
+  geom_line(aes(y = Prediksi, color = "ARIMA(2,1,2) Forecast"), linewidth = 1.0, lty = 1, alpha = 1) +
+  geom_vline(xintercept = train_size, linetype = "longdash", color = "#d32f2f", linewidth = 0.8) +
+  annotate("text", x = 250, y = 115, label = "TRAINING DATA", color = "#d32f2f", fontface = "bold", size = 3.5) +
+  annotate("text", x = 600, y = 115, label = "TESTING DATA", color = "#d32f2f", fontface = "bold", size = 3.5) +
+  scale_color_manual(values = c("Actual Data" = "gray30", "ARIMA(2,1,2) Forecast" = "#ff007f")) +
+  labs(
+    title = "ARIMA Model Performance Visualization (High-Contrast Edition)",
+    subtitle = "In-Sample Estimation (Train Data) vs Out-of-Sample Forecast (Test Data) using ARIMA(2,1,2)",
+    x = "Time / Period (Index)",
+    y = "Brent Crude Oil Price (USD)",
+    color = "Data Category:"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    panel.grid.major = element_line(color = "#f5f5f5"),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 12)
+  )
+```
+
+## 9. Bandingkan Model
+### 9.1 Tabel perbandingan 
+```{r}
+# --- MODEL 1: NAIVE ---
+acc_naive_train <- accuracy(model_naive)[1, ]
+acc_naive_test  <- accuracy(model_naive$mean, test_data)[1, ]
+
+# --- MODEL 2: DMA(6) ---
+acc_dma_train <- accuracy(train_fitted_dma3,
+                    train_data[(length(train_data)-
+                        length(train_fitted_dma3)+1):length(train_data)])[1,]
+
+acc_dma_test <- accuracy(test_forecast_dma3,test_data)[1, ]
+
+# --- MODEL 3: DES(alpha = 0.16 dan beta = 0.081) ---
+acc_des_train <- accuracy(model_des5)[1, ]
+acc_des_test <- accuracy(model_des5$mean,test_data)[1, ]
+
+# --- MODEL 4: ARIMA(2,1,2) ---
+acc_arima_train <- accuracy(fit_arima212$fitted, train_data)[1, ]
+acc_arima_test  <- accuracy(forecast_arima212$mean, test_data)[1, ]
+
+# --- MODEL 5: TS REGRESSION ---
+acc_reg_train <- accuracy(train_fitted_reg5, df_train_reg$Aktual)[1, ]
+acc_reg_test <- accuracy(test_forecast_reg5, test_data)[1, ]
+
+tabel_komparatif <- data.frame(
+  Model = c("Naive", "Moving Average (DMA)", "Exponential Smoothing (DES)", "ARIMA(2,1,2)", "TS Regression"),
+  
+  # Kolom RMSE
+  RMSE_Train = c(acc_naive_train["RMSE"], acc_dma_train["RMSE"], acc_des_train["RMSE"], acc_arima_train["RMSE"], acc_reg_train["RMSE"]),
+  RMSE_Test  = c(acc_naive_test["RMSE"],  acc_dma_test["RMSE"],  acc_des_test["RMSE"],  acc_arima_test["RMSE"],  acc_reg_test["RMSE"]),
+  
+  # Kolom MSE
+  MSE_Train  = c(acc_naive_train["RMSE"]^2, acc_dma_train["RMSE"]^2, acc_des_train["RMSE"]^2, acc_arima_train["RMSE"]^2, acc_reg_train["RMSE"]^2),
+  MSE_Test   = c(acc_naive_test["RMSE"]^2,  acc_dma_test["RMSE"]^2,  acc_des_test["RMSE"]^2,  acc_arima_test["RMSE"]^2,  acc_reg_test["RMSE"]^2),
+  
+  # Kolom MAPE
+  MAPE_Train = c(acc_naive_train["MAPE"], acc_dma_train["MAPE"], acc_des_train["MAPE"], acc_arima_train["MAPE"], acc_reg_train["MAPE"]),
+  MAPE_Test  = c(acc_naive_test["MAPE"],  acc_dma_test["MAPE"],  acc_des_test["MAPE"],  acc_arima_test["MAPE"],  acc_reg_test["MAPE"])
+)
+
+cat("          COMPARATIVE TABLE ACCURACY MULTI METRIC (TRAIN VS TEST SET)\n")
+print(round(tabel_komparatif %>% tibble::column_to_rownames("Model"), 4))
+```
+Based on the multi-metric comparison table on the test data set, the ARIMA(2,1,2) model produced the best performance in the MAPE_Test metric at 13.8377%, while the Naive model had a slight advantage in the RMSE_Test metric at 20.0724.
+
+The significant spike in error values (RMSE and MAPE) across all models when switching from training to testing data was due to a structural break in the Brent oil market. At the end of the training period, the price closed at USD 65.29, but during the testing period, the market experienced an extreme bullish trend, peaking at USD 118.35.
+
+Given that the ARIMA(2,1,2) model was able to minimize the overall average percentage deviation (the smallest MAPE), the ARIMA(2,1,2) and Naive models were selected as the best models for 30-day forecasting.
+
+### 9.2 Visualisasi RMSE
+```{r}
+ggplot(tabel_komparatif, aes(x = reorder(Model, RMSE_Test), y = RMSE_Test, fill = Model)) +
+  geom_bar(stat = "identity", width = 0.5, show.legend = FALSE) +
+  geom_text(aes(label = round(RMSE_Test, 4)), vjust = -0.5, fontface = "bold", size = 3.5) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Comparison of RMSE (Root Mean Squared Error) on Testing Data",
+    subtitle = "Lower RMSE values indicate better out-of-sample forecasting performance",
+    x = "Forecasting Methods / Models",
+    y = "RMSE Value (Test Set)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    panel.grid.major.x = element_blank()
+  )
+```
+
+### 9.3 Visualisasi MSE
+```{r}
+ggplot(tabel_komparatif, aes(x = reorder(Model, MSE_Test), y = MSE_Test, fill = Model)) +
+  geom_bar(stat = "identity", width = 0.5, show.legend = FALSE) +
+  geom_text(aes(label = round(MSE_Test, 4)), vjust = -0.5, fontface = "bold", size = 3.5) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Comparison of MSE (Mean Squared Error) on Testing Data",
+    subtitle = "Lower MSE values indicate better out-of-sample forecasting performance",
+    x = "Forecasting Methods / Models",
+    y = "MSE Value (Test Set)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    panel.grid.major.x = element_blank()
+  )
+```
+
+### 9.4 Visualisasi MAPE
+```{r}
+ggplot(tabel_komparatif, aes(x = reorder(Model, MAPE_Test), y = MAPE_Test, fill = Model)) +
+  geom_bar(stat = "identity", width = 0.5, show.legend = FALSE) +
+  geom_text(aes(label = paste0(round(MAPE_Test, 4), "%")), vjust = -0.5, fontface = "bold", size = 3.5) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Comparison of MAPE (Mean Absolute Percentage Error) on Testing Data",
+    subtitle = "Lower MAPE values indicate better out-of-sample forecasting performance",
+    x = "Forecasting Methods / Models",
+    y = "MAPE Value (Test Set, %)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    panel.grid.major.x = element_blank()
+  )
+```
